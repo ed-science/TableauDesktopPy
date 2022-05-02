@@ -55,20 +55,18 @@ class Workbook:
         if twb[-1][:3] != "twb" or len(twb) == 1:
             return self.filename + " is not a valid .twb or .twbx file."
 
+        # unzip packaged workbooks to obtain xml
+        if twb[-1] == "twb":
+            xml = lxml.etree.parse(self.filename).getroot()
+
         else:
+            with open(self.filename, "rb") as binfile:
+                twbx = zipfile.ZipFile(binfile)
+                name = [w for w in twbx.namelist() if w.find(".twb") != -1][0]
+                unzip = twbx.open(name)
+                xml = lxml.etree.parse(unzip).getroot()
 
-            # unzip packaged workbooks to obtain xml
-            if twb[-1] == "twb":
-                xml = lxml.etree.parse(self.filename).getroot()
-
-            else:
-                with open(self.filename, "rb") as binfile:
-                    twbx = zipfile.ZipFile(binfile)
-                    name = [w for w in twbx.namelist() if w.find(".twb") != -1][0]
-                    unzip = twbx.open(name)
-                    xml = lxml.etree.parse(unzip).getroot()
-
-            return xml
+        return xml
 
     def _get_custom_sql(self):
         """
@@ -76,9 +74,7 @@ class Workbook:
         """
 
         search = self.xml.xpath("//relation[@type='text']")
-        queries = list(set([sql.text.lower() for sql in search]))
-
-        return queries
+        return list({sql.text.lower() for sql in search})
 
     def _get_files(self):
         """
@@ -86,9 +82,7 @@ class Workbook:
         """
 
         search = self.xml.xpath("//connection[@filename != '']")
-        files = list(set([f.attrib["filename"] for f in search]))
-
-        return files
+        return list({f.attrib["filename"] for f in search})
 
     def _get_onedrive(self):
         """
@@ -96,9 +90,7 @@ class Workbook:
         """
 
         search = self.xml.xpath("//connection[@cloudFileProvider='onedrive']")
-        onedrive = list(set([od.attrib["filename"] for od in search]))
-
-        return onedrive
+        return list({od.attrib["filename"] for od in search})
 
     def _get_db_connections(self):
 
@@ -107,9 +99,7 @@ class Workbook:
         """
 
         search = self.xml.xpath("//connection[@dbname]")
-        dbs = list(set([(db.attrib["dbname"], db.attrib["class"]) for db in search]))
-
-        return dbs
+        return list({(db.attrib["dbname"], db.attrib["class"]) for db in search})
 
     def _get_fonts(self):
         """
@@ -121,9 +111,7 @@ class Workbook:
 
         fonts1 = [font.attrib["value"] for font in font_search1]
         fonts2 = [font.attrib["fontname"] for font in font_search2]
-        fonts = list(set(fonts1 + fonts2))
-
-        return fonts
+        return list(set(fonts1 + fonts2))
 
     def _get_colors(self):
         """
@@ -143,14 +131,14 @@ class Workbook:
 
                 # Get colors for each style element
                 color_search = style.xpath(".//format[contains(@value, '#')]")
-                for color in color_search:
-                    all_colors.append(
-                        (
-                            sheet.attrib["name"],
-                            style.attrib["element"],
-                            color.attrib["value"],
-                        )
+                all_colors.extend(
+                    (
+                        sheet.attrib["name"],
+                        style.attrib["element"],
+                        color.attrib["value"],
                     )
+                    for color in color_search
+                )
 
             # Get tooltip elements for each worksheet
             text_search = sheet.xpath(
@@ -160,22 +148,20 @@ class Workbook:
 
                 # Get fontcolors for each tooltip text element
                 ttcolor_search = text.xpath(".//run[contains(@fontcolor, '#')]")
-                for color in ttcolor_search:
-                    all_colors.append(
-                        (
-                            sheet.attrib["name"],
-                            "tooltip",
-                            color.attrib["fontcolor"],
-                        )
+                all_colors.extend(
+                    (
+                        sheet.attrib["name"],
+                        "tooltip",
+                        color.attrib["fontcolor"],
                     )
+                    for color in ttcolor_search
+                )
 
         unique_colors = list(set(all_colors))
 
-        color_df = pandas.DataFrame(
+        return pandas.DataFrame(
             unique_colors, columns=["Sheet", "Element", "Color"]
         ).sort_values(["Sheet", "Element"])
-
-        return color_df
 
     def _get_color_palettes(self):
         """
@@ -183,9 +169,7 @@ class Workbook:
         """
 
         search = self.xml.xpath("//encoding[@palette !='']")
-        palettes = list(set([color.attrib["palette"] for color in search]))
-
-        return palettes
+        return list({color.attrib["palette"] for color in search})
 
     def _get_hidden_fields(self):
         """
@@ -240,8 +224,9 @@ class Workbook:
             # just coded string
             ds_name = d.attrib["datasource"]
             ds_caption = self.xml.xpath(
-                ".//datasource[@name='{}' and @caption]".format(ds_name)
+                f".//datasource[@name='{ds_name}' and @caption]"
             )[0].attrib["caption"]
+
 
             # return captions for calculated fields, otherwise return name
             has_caption = d.xpath("./column[@caption and @name]")
@@ -273,9 +258,7 @@ class Workbook:
         search = self.xml.xpath(
             "//zone[@_.fcp.SetMembershipControl.false...type = 'bitmap']"
         )
-        images = list(set([img.attrib["param"].lower() for img in search]))
-
-        return images
+        return list({img.attrib["param"].lower() for img in search})
 
     def _get_shapes(self):
         """
@@ -283,9 +266,7 @@ class Workbook:
         """
 
         search = self.xml.xpath("//shape[@name != '']")
-        shapes = list(set([shape.attrib["name"].lower() for shape in search]))
-
-        return shapes
+        return list({shape.attrib["name"].lower() for shape in search})
 
     def hide_field(self, field: str, datasource: str = None, hide: bool = True):
         """
@@ -296,24 +277,22 @@ class Workbook:
         unhide hidden fields from the workbook.
         """
 
-        col_name = "[{}]".format(field)
+        col_name = f"[{field}]"
 
         # search for captions for calculated fields, otherwise search for name
-        if datasource == None:  # grab all instances of field
+        if datasource is None:  # grab all instances of field
             to_hide = self.xml.xpath(
-                "//datasource/column[@name = '{}']".format(col_name)
-            ) + self.xml.xpath("//datasource/column[@caption = '{}']".format(field))
+                f"//datasource/column[@name = '{col_name}']"
+            ) + self.xml.xpath(f"//datasource/column[@caption = '{field}']")
+
 
         else:  # grab all instances of datasource/field (should be length 1)
             to_hide = self.xml.xpath(
-                "//datasource[@caption = '{}']/column[@name = '{}']".format(
-                    datasource, col_name
-                )
+                f"//datasource[@caption = '{datasource}']/column[@name = '{col_name}']"
             ) + self.xml.xpath(
-                "//datasource[@caption = '{}']/column[@caption = '{}']".format(
-                    datasource, field
-                )
+                f"//datasource[@caption = '{datasource}']/column[@caption = '{field}']"
             )
+
 
         for col in to_hide:
             col.attrib["hidden"] = str(hide).lower()
@@ -328,7 +307,7 @@ class Workbook:
         mentioned explicitly. Otherwise, the font from the default argument is used.
         """
 
-        if font_dict == None:
+        if font_dict is None:
 
             fonts_1 = self.xml.xpath("//format[@attr = 'font-family']")
             fonts_2 = self.xml.xpath("//run")
@@ -358,12 +337,13 @@ class Workbook:
             if "Default" not in font_dict.keys():
                 font_dict["Default"] = default
 
-            for old_font in font_dict.keys():
+            for old_font in font_dict:
 
                 fonts_1 = self.xml.xpath(
-                    "//format[@attr = 'font-family' and @value = '{}']".format(old_font)
+                    f"//format[@attr = 'font-family' and @value = '{old_font}']"
                 )
-                fonts_2 = self.xml.xpath("//run[@fontname = '{}']".format(old_font))
+
+                fonts_2 = self.xml.xpath(f"//run[@fontname = '{old_font}']")
                 fonts_3 = [x for x in self.xml.xpath("//run") if x not in fonts_2]
 
                 for font in fonts_1:
@@ -426,43 +406,32 @@ class Workbook:
             os.stat(self.filename).st_ctime
         ).strftime("%Y-%m-%d-%H:%M:%S")
 
-        custom_sql = "There are {} custom SQL queries in this workbook.".format(
-            len(self.custom_sql)
-        )
+        custom_sql = f"There are {len(self.custom_sql)} custom SQL queries in this workbook."
+
 
         # first element of c is name, second element is connection class (type)
-        clean_dbs = ["{} ({})".format(c[0], c[1]) for c in self.connections]
-        
-        if clean_dbs == []:
-            dbs = "\n   - N/A"
-        else:
-            dbs = "\n   - ".join(clean_dbs)
+        clean_dbs = [f"{c[0]} ({c[1]})" for c in self.connections]
 
-        if self.files == []:
-            files = "\n   - N/A"
-        else:
-            files = "\n   - ".join(self.files)
+        dbs = "\n   - ".join(clean_dbs) if clean_dbs else "\n   - N/A"
+        files = "\n   - N/A" if self.files == [] else "\n   - ".join(self.files)
+        if note is None:
+            msg = f'This documentation was generated automatically at {datetime.datetime.now().strftime("%Y-%m-%d-%H:%M:%S")}'
 
-        if note == None:
-            msg = "This documentation was generated automatically at {}".format(
-                datetime.datetime.today().strftime("%Y-%m-%d-%H:%M:%S")
-            )
         else:
             msg = note
 
-        if filename == None:
+        if filename is None:
             fn = os.sep.join(self.filename.split(os.sep)[:-1]) + os.sep + "README.txt"
         else:
             fn = filename
 
-        if save:
-            with open(fn, "w") as workbook_readme:
-                workbook_readme.write(
-                    text.format(title, author, date, custom_sql, dbs, files, msg)
-                )
-            return "File saved at " + fn
-        else:
+        if not save:
             return text.format(title, author, date, custom_sql, dbs, files, msg)
+        with open(fn, "w") as workbook_readme:
+            workbook_readme.write(
+                text.format(title, author, date, custom_sql, dbs, files, msg)
+            )
+        return "File saved at " + fn
 
     def save(self, filename: str = None):
         """
@@ -472,17 +441,12 @@ class Workbook:
         saved as ".twbx" files.
         """
 
-        if filename == None:
-            fn = self.filename
-        else:
-            fn = os.path.normpath(filename)
-
+        fn = self.filename if filename is None else os.path.normpath(filename)
         # twb / twbx -> twb
         if fn.endswith(".twb"):
             tree = lxml.etree.ElementTree(self.xml)
             tree.write(fn)
 
-        # twbx -> twbx
         elif fn.endswith(".twbx") and self.filename.endswith(".twbx"):
 
             # create temp "[workbook name].twb files" folder for holding extracts
@@ -510,9 +474,7 @@ class Workbook:
             all_files = []
 
             for dirname, subdirs, files in os.walk(path):
-                for filename in files:
-                    all_files.append(os.path.join(dirname, filename))
-
+                all_files.extend(os.path.join(dirname, filename) for filename in files)
             files_to_zip = [
                 f
                 for f in all_files
